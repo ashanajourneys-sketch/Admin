@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ashana Journeys — Admin Control Room</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,700&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+
+<!-- Firebase (Auth + Firestore full read/write) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+  const firebaseConfig = {
+  apiKey: "AIzaSyAvMTGPX1NRdDWfBJVTwKFu1MX1-Junq7Y",
+  authDomain: "ashana-journeys.firebaseapp.com",
+  projectId: "ashana-journeys",
+  storageBucket: "ashana-journeys.firebasestorage.app",
+  messagingSenderId: "1056206455125",
+  appId: "1:1056206455125:web:5e09ea23b28847dff06fdc",
+  measurementId: "G-FNKGTSYC8C"
+};
+  const app = initializeApp(firebaseConfig);
+  const db  = getFirestore(app);
+  const auth = getAuth(app);
+
+  // ── Auth state ─────────────────────────────────────────────────────────────
+  onAuthStateChanged(auth, user => {
+    if (user) {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('dashboard').style.display    = 'block';
+      document.getElementById('admin-email').textContent    = user.email;
+
+      loadTrips();
+      loadMerchants();
+      loadReviews();
+      loadFAQs(); 
+
+    } else {
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('dashboard').style.display    = 'none';
+    }
+  });
+
+  // ── Login ──────────────────────────────────────────────────────────────────
+  window.doLogin = async () => {
+    const email = document.getElementById('ae').value.trim();
+    const pass  = document.getElementById('ap').value;
+    const err   = document.getElementById('aerr');
+    const btn   = document.getElementById('login-btn');
+    err.textContent = '';
+    btn.textContent = 'Signing in…';
+    btn.disabled = true;
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch(e) {
+      err.textContent = 'Invalid email or password.';
+      btn.textContent = 'Sign In ✦';
+      btn.disabled = false;
+    }
+  };
+
+  window.doLogout = async () => {
+    await signOut(auth);
+  };
+
+  // Allow Enter key on password field
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('ap').addEventListener('keydown', e => {
+      if (e.key === 'Enter') window.doLogin();
+    });
+  });
+
+  // ── Image preview helper ───────────────────────────────────────────────────
+  window.previewImg = (input, previewId, labelId) => {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const preview = document.getElementById(previewId);
+      const label   = document.getElementById(labelId);
+      preview.src = e.target.result;
+      preview.classList.add('visible');
+      if (label) label.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ── Helper: Upload to ImgBB and return URL ────────────────────────────────
+  async function uploadToImgBB(fileInput) {
+    const file = fileInput?.files?.[0];
+    if (!file) return ''; // No file selected, return empty string
+
+    // Paste your ImgBB API key right here:
+    const IMGBB_API_KEY = '5ae3562d05fb38e0029664fc1140fde9'; 
+    
+    const formData = new FormData();
+    formData.append('image', file);
+
+    try {
+      const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        return data.data.url; // Returns the direct link to the image
+      } else {
+        throw new Error('ImgBB rejected the upload.');
+      }
+    } catch (err) {
+      console.error('ImgBB Upload Error:', err);
+      return ''; 
+    }
+  }
+
+
+  // ── Trips ──────────────────────────────────────────────────────────────────
+  window.loadTrips = function() {
+    onSnapshot(collection(db, 'trips'), snap => {
+      const list = document.getElementById('trips-list');
+      if (!list) return;
+      list.innerHTML = '';
+      if (snap.empty) {
+        list.innerHTML = '<p class="empty-note">No trips yet. Add one below.</p>';
+        return;
+      }
+      snap.forEach(d => {
+        const t = d.data();
+        const row = document.createElement('div');
+        row.className = 'data-row';
+        row.innerHTML = `
+          <div class="row-info">
+            <span class="row-title">${t.name}</span>
+            <span class="row-sub">📍 ${t.location} &nbsp;·&nbsp; 📅 ${t.date}</span>
+          </div>
+          <button class="btn-del-row" onclick="window.deleteTrip('${d.id}')">Delete</button>
+        `;
+        list.appendChild(row);
+      });
+    });
+  };
+
+    window.addTrip = async () => {
+    const n = document.getElementById('tn').value.trim();
+    const l = document.getElementById('tl').value.trim();
+    const d = document.getElementById('td').value.trim();
+    const err = document.getElementById('trip-err');
+    const btn = document.querySelector('#trips-list ~ .btn-add'); // Get the button
+    
+    if (!n || !l || !d) { err.textContent = 'Please fill in all fields.'; return; }
+    err.textContent = '';
+    
+    // Change button text so admin knows it's working
+    const originalBtnText = btn.textContent;
+    btn.textContent = 'Uploading to ImgBB... ✦';
+    btn.disabled = true;
+
+    try {
+      // 1. Upload to ImgBB first
+      const photoUrl = await uploadToImgBB(document.getElementById('ti'));
+      
+      // 2. Save the new URL to Firestore
+      await addDoc(collection(db, 'trips'), { name: n, location: l, date: d, photo: photoUrl });
+      
+      // 3. Reset form
+      ['tn','tl','td'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('ti').value = '';
+      const prev = document.getElementById('trip-preview');
+      prev.classList.remove('visible'); prev.src = '';
+      document.getElementById('trip-img-label').style.display = '';
+      
+      showToast('Trip published!');
+    } catch(e) {
+      err.textContent = 'Failed to add trip. Check console.';
+      console.error(e);
+    } finally {
+      btn.textContent = originalBtnText;
+      btn.disabled = false;
+    }
+  };
+
+
+  window.deleteTrip = async id => {
+    if (!confirm('Delete this trip? This cannot be undone.')) return;
+    await deleteDoc(doc(db, 'trips', id));
+    showToast('Trip deleted.');
+  };
+
+  // ── Merchants ──────────────────────────────────────────────────────────────
+  window.loadMerchants = function() {
+    onSnapshot(collection(db, 'merchants'), snap => {
+      const list = document.getElementById('merch-list');
+      if (!list) return;
+      list.innerHTML = '';
+
+      /* ── Always show the hardcoded T-shirt first ── */
+      const staticRow = document.createElement('div');
+      staticRow.className = 'data-row';
+      staticRow.innerHTML = `
+        <div class="row-info">
+          <span class="row-title">🎽 Ashana Journeys T-Shirt <span style="font-size:.65rem;color:var(--G);border:1px solid rgba(201,149,43,.35);padding:.05rem .4rem;border-radius:4px;margin-left:.4rem;">Hardcoded</span></span>
+          <span class="row-sub">RM 55 &nbsp;·&nbsp; 360° View in main page</span>
+        </div>
+        <button class="btn-edit-row" onclick="editTshirtLink()">Edit Link</button>
+      `;
+      list.appendChild(staticRow);
+
+      if (snap.empty) {
+        const note = document.createElement('p');
+        note.className = 'empty-note'; note.textContent = 'No additional items. Add one below.';
+        list.appendChild(note);
+        return;
+      }
+      snap.forEach(d => {
+        const m = d.data();
+        const row = document.createElement('div');
+        row.className = 'data-row';
+        row.innerHTML = `
+          <div class="row-info">
+            <span class="row-title">${m.name}</span>
+            <span class="row-sub">RM ${m.price}${m.photo ? ' &nbsp;·&nbsp; <a href="' + m.photo + '" target="_blank" style="color:var(--G);font-size:.72rem">View photo ↗</a>' : ''}${m.link ? ' &nbsp;·&nbsp; <a href="' + m.link + '" target="_blank" style="color:var(--GL);font-size:.72rem">Buy link ↗</a>' : ''}</span>
+          </div>
+          <button class="btn-del-row" onclick="window.deleteMerchant('${d.id}')">Delete</button>
+        `;
+        list.appendChild(row);
+      });
+    });
+  };
+
+  /* Edit the hardcoded T-shirt buy link */
+  window.editTshirtLink = function() {
+    const currentLink = document.getElementById('tshirt-buy-link-val')?.value || 'tshirt-product.html';
+    const newLink = prompt('Enter the Buy Now link for the Ashana T-Shirt:', currentLink);
+    if (newLink === null) return;
+    // Store in localStorage as a quick override
+    localStorage.setItem('ashana_tshirt_link', newLink);
+    showToast('T-Shirt link saved! Update index1.html btn-buy href to: ' + newLink);
+  };
+
+    window.addMerchant = async () => {
+    const n   = document.getElementById('mn').value.trim();
+    const pr  = document.getElementById('mpr').value.trim();
+    const lnk = document.getElementById('ml').value.trim();
+    const err = document.getElementById('merch-err');
+    const btn = document.querySelector('#merch-list ~ .btn-add');
+
+    if (!n || !pr) { err.textContent = 'Name and price are required.'; return; }
+    err.textContent = '';
+
+    const originalBtnText = btn.textContent;
+    btn.textContent = 'Uploading to ImgBB... ✦';
+    btn.disabled = true;
+
+    try {
+      const photoUrl = await uploadToImgBB(document.getElementById('mp'));
+      await addDoc(collection(db, 'merchants'), { name: n, photo: photoUrl, price: pr, link: lnk });
+      ['mn','mpr','ml'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('mp').value = '';
+      const prev = document.getElementById('merch-preview');
+      prev.classList.remove('visible'); prev.src = '';
+      document.getElementById('merch-img-label').style.display = '';
+      showToast('Item added!');
+    } catch(e) {
+      err.textContent = 'Failed to add item. Check console.';
+      console.error(e);
+    } finally {
+      btn.textContent = originalBtnText;
+      btn.disabled = false;
+    }
+  };
+
+
+  window.deleteMerchant = async id => {
+    if (!confirm('Delete this item? This cannot be undone.')) return;
+    await deleteDoc(doc(db, 'merchants', id));
+    showToast('Item deleted.');
+  };
+
+  // ── Reviews ────────────────────────────────────────────────────────────────
+  window.loadReviews = function() {
+    onSnapshot(collection(db, 'reviews'), snap => {
+      const list = document.getElementById('reviews-list');
+      if (!list) return;
+      list.innerHTML = '';
+      if (snap.empty) {
+        list.innerHTML = '<p class="empty-note">No reviews yet. Add one below.</p>';
+        return;
+      }
+      snap.forEach(d => {
+        const r = d.data();
+        const row = document.createElement('div');
+        row.className = 'data-row';
+        row.innerHTML = `
+          <div class="row-info">
+            <span class="row-title">⭐ ${r.name || 'Anonymous'}</span>
+            <span class="row-sub">${r.date || ''} &nbsp;·&nbsp; "${(r.message || '').substring(0,60)}${r.message && r.message.length > 60 ? '…' : ''}"</span>
+          </div>
+          <button class="btn-del-row" onclick="window.deleteReview('${d.id}')">Delete</button>
+        `;
+        list.appendChild(row);
+      });
+    });
+  };
+  // ── FAQs ──────────────────────────────────────────────────────────────────
+  window.loadFAQs = function() {
+    onSnapshot(collection(db, 'faqs'), snap => {
+      const list = document.getElementById('faq-list-admin');
+      if (!list) return;
+      list.innerHTML = '';
+      if (snap.empty) {
+        list.innerHTML = '<p class="empty-note">No FAQs yet. Add one below.</p>';
+        return;
+      }
+      snap.forEach(d => {
+        const f = d.data();
+        const row = document.createElement('div');
+        row.className = 'data-row';
+        row.innerHTML = `
+          <div class="row-info">
+            <span class="row-title">Q: ${f.question}</span>
+            <span class="row-sub">A: ${(f.answer || '').substring(0, 60)}…</span>
+          </div>
+          <button class="btn-del-row" onclick="window.deleteFaq('${d.id}')">Delete</button>
+        `;
+        list.appendChild(row);
+      });
+    });
+  };
+
+  window.addFaq = async () => {
+    const q = document.getElementById('faq-q').value.trim();
+    const a = document.getElementById('faq-a').value.trim();
+    const err = document.getElementById('faq-err');
+    if (!q || !a) { err.textContent = 'Question and answer are required.'; return; }
+    err.textContent = '';
+    try {
+      await addDoc(collection(db, 'faqs'), { question: q, answer: a });
+      document.getElementById('faq-q').value = '';
+      document.getElementById('faq-a').value = '';
+      showToast('FAQ published!');
+    } catch(e) {
+      err.textContent = 'Failed to add FAQ. Check console.';
+      console.error(e);
+    }
+  };
+
+  window.deleteFaq = async id => {
+    if (!confirm('Delete this FAQ? This cannot be undone.')) return;
+    await deleteDoc(doc(db, 'faqs', id));
+    showToast('FAQ deleted.');
+  };
+
+  window.addReview = async () => {
+    const name    = document.getElementById('rn').value.trim();
+    const message = document.getElementById('rm').value.trim();
+    const date    = document.getElementById('rd').value.trim();
+    const err     = document.getElementById('review-err');
+    if (!name || !message) { err.textContent = 'Name and message are required.'; return; }
+    err.textContent = '';
+    try {
+      await addDoc(collection(db, 'reviews'), { name, message, date });
+      ['rn','rm','rd'].forEach(id => document.getElementById(id).value = '');
+      showToast('Review published!');
+    } catch(e) {
+      err.textContent = 'Failed to add review. Check console.';
+      console.error(e);
+    }
+  };
+
+  window.deleteReview = async id => {
+    if (!confirm('Delete this review? This cannot be undone.')) return;
+    await deleteDoc(doc(db, 'reviews', id));
+    showToast('Review deleted.');
+  };
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
+  window.showToast = msg => {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2800);
+  };
+</script>
+
+<style>
+:root{
+  --F:#1a3329;--FM:#1e3a2f;--FL:#2a4a3a;
+  --S:#f0ebe0;--SL:#f7f3ec;
+  --G:#c9952b;--GL:#e0b04a;
+  --TK:#1a2018;--TM:#4a5a48;
+  --CARD:#1a2f22;--BORDER:rgba(201,149,43,.2);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:'Jost',sans-serif;background:#0f1e16;color:var(--S);min-height:100vh}
+
+/* ── LOGIN SCREEN ───────────────────────────────────────────────────────── */
+#login-screen{
+  display:flex;align-items:center;justify-content:center;
+  min-height:100vh;padding:2rem;
+  background:radial-gradient(ellipse at 60% 30%, #1e3a2f 0%, #0d1a12 70%);
+}
+.login-box{
+  width:100%;max-width:400px;
+  background:var(--CARD);
+  border:1px solid var(--BORDER);
+  border-radius:12px;padding:2.5rem;
+  box-shadow:0 24px 64px rgba(0,0,0,.6);
+}
+.login-logo{
+  font-family:'Cormorant Garamond',serif;
+  font-size:1.55rem;font-weight:700;
+  color:var(--S);margin-bottom:.2rem;
+  text-align:center;
+}
+.login-logo em{color:var(--G);font-style:italic}
+.login-sub{
+  text-align:center;font-size:.68rem;letter-spacing:.2em;
+  text-transform:uppercase;color:rgba(240,235,224,.3);
+  margin-bottom:2.2rem;
+}
+.login-badge{
+  display:inline-flex;align-items:center;gap:.4rem;
+  background:rgba(201,149,43,.1);border:1px solid rgba(201,149,43,.28);
+  color:var(--G);font-size:.65rem;letter-spacing:.14em;text-transform:uppercase;
+  padding:.22rem .65rem;border-radius:20px;
+  margin:0 auto 2rem;display:flex;width:fit-content;
+}
+.fg{margin-bottom:.9rem}
+.fg label{
+  display:block;font-size:.65rem;letter-spacing:.14em;
+  text-transform:uppercase;color:rgba(240,235,224,.38);margin-bottom:.38rem;
+}
+.fg input{
+  width:100%;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);
+  color:var(--S);padding:.7rem .9rem;border-radius:6px;
+  font-family:'Jost',sans-serif;font-size:.9rem;
+  outline:none;transition:border-color .25s;
+}
+.fg input:focus{border-color:var(--G)}
+.fg input::placeholder{color:rgba(255,255,255,.2)}
+.aerr{
+  color:#ff7575;font-size:.78rem;
+  text-align:center;min-height:1rem;margin-bottom:.5rem;
+}
+#login-btn{
+  width:100%;background:var(--G);color:var(--F);
+  border:none;padding:.82rem;border-radius:6px;
+  font-family:'Jost',sans-serif;font-weight:700;
+  font-size:.85rem;letter-spacing:.06em;
+  cursor:pointer;transition:background .25s;
+}
+#login-btn:hover:not(:disabled){background:var(--GL)}
+#login-btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* ── DASHBOARD ──────────────────────────────────────────────────────────── */
+#dashboard{display:none}
+
+.top-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:1rem 2rem;
+  background:#0d1a12;
+  border-bottom:1px solid rgba(255,255,255,.06);
+  position:sticky;top:0;z-index:100;
+}
+.top-bar-brand{
+  font-family:'Cormorant Garamond',serif;
+  font-size:1.25rem;font-weight:700;color:var(--S);
+}
+.top-bar-brand em{color:var(--G);font-style:italic}
+.top-bar-right{display:flex;align-items:center;gap:1rem}
+.top-bar-user{
+  font-size:.75rem;color:rgba(240,235,224,.4);
+}
+.btn-signout{
+  background:none;border:1px solid rgba(255,100,100,.3);
+  color:rgba(255,100,100,.6);
+  padding:.3rem .75rem;border-radius:4px;
+  font-family:'Jost',sans-serif;font-size:.73rem;
+  cursor:pointer;transition:all .25s;
+}
+.btn-signout:hover{border-color:rgba(255,100,100,.6);color:#ff6060}
+
+.dash-wrap{
+  max-width:1100px;margin:0 auto;
+  padding:2.5rem 2rem 4rem;
+  display:grid;grid-template-columns:1fr 1fr;gap:2rem;
+}
+@media(max-width:820px){
+  .dash-wrap{grid-template-columns:1fr}
+  .top-bar{padding:.85rem 1.2rem}
+}
+
+/* ── PANEL ──────────────────────────────────────────────────────────────── */
+.panel{
+  background:var(--CARD);
+  border:1px solid var(--BORDER);
+  border-radius:10px;overflow:hidden;
+}
+.panel-head{
+  padding:1.25rem 1.5rem;
+  border-bottom:1px solid rgba(255,255,255,.06);
+  display:flex;align-items:center;gap:.75rem;
+}
+.panel-icon{font-size:1.2rem}
+.panel-title{
+  font-family:'Cormorant Garamond',serif;
+  font-size:1.15rem;font-weight:700;color:var(--S);
+}
+.panel-body{padding:1.5rem}
+
+/* ── DATA LIST ──────────────────────────────────────────────────────────── */
+.data-list{
+  max-height:260px;overflow-y:auto;
+  margin-bottom:1.5rem;
+  border:1px solid rgba(255,255,255,.06);
+  border-radius:6px;
+}
+.data-list::-webkit-scrollbar{width:4px}
+.data-list::-webkit-scrollbar-track{background:transparent}
+.data-list::-webkit-scrollbar-thumb{background:rgba(201,149,43,.3);border-radius:2px}
+.data-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.85rem 1rem;
+  border-bottom:1px solid rgba(255,255,255,.05);
+  gap:.75rem;
+}
+.data-row:last-child{border-bottom:none}
+.row-info{display:flex;flex-direction:column;gap:.2rem;flex:1;min-width:0}
+.row-title{
+  font-size:.88rem;font-weight:600;color:var(--S);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.row-sub{font-size:.74rem;color:rgba(240,235,224,.4)}
+.btn-del-row{
+  background:rgba(200,50,50,.1);color:rgba(255,100,100,.7);
+  border:1px solid rgba(200,50,50,.25);
+  padding:.25rem .65rem;border-radius:4px;
+  font-family:'Jost',sans-serif;font-size:.7rem;
+  cursor:pointer;flex-shrink:0;transition:all .25s;
+  white-space:nowrap;
+}
+.btn-del-row:hover{background:rgba(200,50,50,.25);color:#ff6060}
+.btn-edit-row{
+  background:rgba(201,149,43,.1);color:var(--G);
+  border:1px solid rgba(201,149,43,.28);
+  padding:.25rem .65rem;border-radius:4px;
+  font-family:'Jost',sans-serif;font-size:.7rem;
+  cursor:pointer;flex-shrink:0;transition:all .25s;
+  white-space:nowrap;
+}
+.btn-edit-row:hover{background:rgba(201,149,43,.22);color:var(--GL)}
+.empty-note{
+  padding:1.5rem;text-align:center;
+  font-size:.8rem;color:rgba(240,235,224,.28);
+}
+
+/* ── ADD FORM ───────────────────────────────────────────────────────────── */
+.form-title{
+  font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--G);margin-bottom:.9rem;
+  display:flex;align-items:center;gap:.5rem;
+}
+.form-title::before{content:'';width:18px;height:1px;background:var(--G)}
+.form-grid{display:grid;gap:.65rem}
+.form-grid input{
+  width:100%;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.1);
+  color:var(--S);padding:.65rem .85rem;border-radius:5px;
+  font-family:'Jost',sans-serif;font-size:.85rem;
+  outline:none;transition:border-color .25s;
+}
+.form-grid input:focus{border-color:var(--G)}
+.form-grid input::placeholder{color:rgba(255,255,255,.2)}
+.form-err{color:#ff7575;font-size:.75rem;min-height:.9rem;margin-top:.1rem}
+.btn-add{
+  width:100%;background:var(--G);color:var(--F);
+  border:none;padding:.72rem;border-radius:5px;
+  font-family:'Jost',sans-serif;font-weight:700;
+  font-size:.82rem;letter-spacing:.05em;
+  cursor:pointer;transition:background .25s;margin-top:.25rem;
+}
+.btn-add:hover{background:var(--GL)}
+
+/* ── DIVIDER ────────────────────────────────────────────────────────────── */
+.divider{height:1px;background:rgba(255,255,255,.07);margin:1.25rem 0}
+
+/* ── IMAGE UPLOAD ────────────────────────────────────────────────────────── */
+.img-upload-wrap{margin-bottom:.65rem}
+.img-upload-label{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:.5rem;height:110px;border:1.5px dashed rgba(201,149,43,.35);
+  border-radius:6px;cursor:pointer;transition:border-color .25s,background .25s;
+  background:rgba(255,255,255,.03);position:relative;overflow:hidden;
+}
+.img-upload-label:hover{border-color:var(--G);background:rgba(201,149,43,.06)}
+.img-upload-label input[type=file]{
+  position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;
+}
+.img-upload-icon{font-size:1.5rem;pointer-events:none}
+.img-upload-hint{font-size:.68rem;letter-spacing:.08em;color:rgba(240,235,224,.3);text-align:center;pointer-events:none}
+.img-preview{
+  width:100%;height:110px;object-fit:cover;border-radius:4px;
+  display:none;border:1.5px solid rgba(201,149,43,.3);
+}
+.img-preview.visible{display:block}
+
+/* ── TOAST ──────────────────────────────────────────────────────────────── */
+#toast{
+  position:fixed;bottom:2rem;left:50%;transform:translateX(-50%) translateY(20px);
+  background:#1a3329;border:1px solid var(--G);
+  color:var(--S);padding:.65rem 1.5rem;border-radius:6px;
+  font-size:.82rem;font-weight:500;
+  opacity:0;pointer-events:none;transition:all .35s;z-index:9999;
+  white-space:nowrap;
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<!--  LOGIN SCREEN                                                           -->
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">Ashana <em>&</em> Journeys</div>
+    <div class="login-sub">Control Room</div>
+    <div class="login-badge">🔒 Admin Access Only</div>
+
+    <div class="fg">
+      <label>Email</label>
+      <input type="email" id="ae" placeholder="Enter E-mail" autocomplete="email"/>
+    </div>
+    <div class="fg">
+      <label>Password</label>
+      <input type="password" id="ap" placeholder="••••••••" autocomplete="current-password"/>
+    </div>
+    <div class="aerr" id="aerr"></div>
+    <button id="login-btn" onclick="doLogin()">Sign In ✦</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<!--  DASHBOARD (shown only when authenticated)                              -->
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<div id="dashboard">
+
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="top-bar-brand">Ashana <em>&</em> Journeys</div>
+    <div class="top-bar-right">
+      <span class="top-bar-user" id="admin-email"></span>
+      <button class="btn-signout" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- Panels -->
+  <div class="dash-wrap">
+
+    <!-- TRIPS PANEL -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-icon">🗺️</span>
+        <span class="panel-title">Upcoming Trips</span>
+      </div>
+      <div class="panel-body">
+
+        <!-- Live list -->
+        <div class="data-list" id="trips-list">
+          <p class="empty-note">Loading…</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Add form -->
+        <div class="form-title">Publish a New Trip</div>
+        <div class="form-grid">
+          <input type="text"   id="tn"  placeholder="Trip Name  (e.g. Cameron Highlands Hike)"/>
+          <input type="text"   id="tl"  placeholder="Location   (e.g. Pahang, Malaysia)"/>
+          <input type="text"   id="td"  placeholder="Date       (e.g. 15–17 August 2025)"/>
+          <div class="img-upload-wrap">
+            <label class="img-upload-label" id="trip-img-label">
+              <input type="file" id="ti" accept="image/*" onchange="previewImg(this,'trip-preview','trip-img-label')"/>
+              <span class="img-upload-icon">🖼️</span>
+              <span class="img-upload-hint">Click to upload trip photo<br/>(optional)</span>
+            </label>
+            <img id="trip-preview" class="img-preview" alt="Trip preview"/>
+          </div>
+        </div>
+        <div class="form-err" id="trip-err"></div>
+        <button class="btn-add" onclick="addTrip()">Publish Trip ✦</button>
+      </div>
+    </div>
+
+    <!-- MERCHANDISE PANEL -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-icon">🛍️</span>
+        <span class="panel-title">Gear Store</span>
+      </div>
+      <div class="panel-body">
+
+        <!-- Live list -->
+        <div class="data-list" id="merch-list">
+          <p class="empty-note">Loading…</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Add form -->
+        <div class="form-title">Add a New Item</div>
+        <div class="form-grid">
+          <input type="text"   id="mn"  placeholder="Product Name  (e.g. Ashana Cap)"/>
+          <div class="img-upload-wrap">
+            <label class="img-upload-label" id="merch-img-label">
+              <input type="file" id="mp" accept="image/*" onchange="previewImg(this,'merch-preview','merch-img-label')"/>
+              <span class="img-upload-icon">📷</span>
+              <span class="img-upload-hint">Click to upload product photo<br/>(optional)</span>
+            </label>
+            <img id="merch-preview" class="img-preview" alt="Product preview"/>
+          </div>
+          <input type="number" id="mpr" placeholder="Price (RM)     (e.g. 45)"/>
+          <input type="url"    id="ml"  placeholder="Buy Link (optional — e.g. https://shopee.com/…)"/>
+        </div>
+        <div class="form-err" id="merch-err"></div>
+        <button class="btn-add" onclick="addMerchant()">Add Item ✦</button>
+      </div>
+    </div>
+
+    <!-- REVIEWS PANEL -->
+    <div class="panel" style="grid-column: 1 / -1;">
+      <div class="panel-head">
+        <span class="panel-icon">⭐</span>
+        <span class="panel-title">Reviews</span>
+      </div>
+      <div class="panel-body">
+
+        <div class="data-list" id="reviews-list">
+          <p class="empty-note">Loading…</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="form-title">Add a New Review</div>
+        <div class="form-grid" style="grid-template-columns: 1fr 1fr;">
+          <input type="text" id="rn" placeholder="Reviewer Name (e.g. Ahmad Fariz)" style="grid-column:1"/>
+          <input type="text" id="rd" placeholder="Date (e.g. March 2025)" style="grid-column:2"/>
+          <textarea id="rm" placeholder="Review message (e.g. Amazing diving trip! The guides were incredible…)"
+            style="grid-column:1/-1; width:100%; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); color:var(--S); padding:.65rem .85rem; border-radius:5px; font-family:'Jost',sans-serif; font-size:.85rem; outline:none; resize:vertical; min-height:90px; transition:border-color .25s;"></textarea>
+        </div>
+        <div class="form-err" id="review-err"></div>
+        <button class="btn-add" onclick="addReview()">Publish Review ✦</button>
+
+      </div>
+    </div>
+    <div class="panel" style="grid-column: 1 / -1;">
+      <div class="panel-head">
+        <span class="panel-icon">❓</span>
+        <span class="panel-title">FAQs</span>
+      </div>
+      <div class="panel-body">
+
+        <div class="data-list" id="faq-list-admin">
+          <p class="empty-note">Loading…</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="form-title">Add a New FAQ</div>
+        <div class="form-grid">
+          <input type="text" id="faq-q" placeholder="Question (e.g. Do I need hiking experience?)"/>
+          <textarea id="faq-a" placeholder="Answer (e.g. No, our trips cater to all levels…)"
+            style="width:100%; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); color:var(--S); padding:.65rem .85rem; border-radius:5px; font-family:'Jost',sans-serif; font-size:.85rem; outline:none; resize:vertical; min-height:90px; transition:border-color .25s;"></textarea>
+        </div>
+        <div class="form-err" id="faq-err"></div>
+        <button class="btn-add" onclick="addFaq()">Publish FAQ ✦</button>
+
+      </div>
+    </div>
+
+  </div><!-- /dash-wrap -->
+</div><!-- /dashboard -->
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+</body>
+</html>
