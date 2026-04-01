@@ -448,13 +448,46 @@
     showToast('Item deleted.');
   };
 
-  /* ── Reviews ── */
+    /* ── Reviews ── */
+  window._pendingReviewsMap = {}; // Temporarily store pending data to move it when approved
+
   window.loadReviews = function() {
+    // 1. Load Pending Reviews
+    onSnapshot(collection(db, 'pending_reviews'), snap => {
+      const list = document.getElementById('pending-reviews-list');
+      if (!list) return;
+      list.innerHTML = '';
+      window._pendingReviewsMap = {};
+      
+      if (snap.empty) { 
+        list.innerHTML = '<p class="empty-note">No pending reviews.</p>'; 
+      } else {
+        snap.forEach(d => {
+          const r = d.data();
+          window._pendingReviewsMap[d.id] = r; // Save data for approval movement
+          
+          const row = document.createElement('div');
+          row.className = 'data-row';
+          row.innerHTML = `
+            <div class="row-info">
+              <span class="row-title">⏳ ${r.name || 'Anonymous'}</span>
+              <span class="row-sub">${r.date || ''} &nbsp;·&nbsp; "${(r.message||'').substring(0,80)}${r.message && r.message.length > 80 ? '…' : ''}"</span>
+            </div>
+            <div class="row-actions" style="flex-direction:row; gap:0.5rem;">
+              <button class="btn-edit-row" style="background:rgba(37,211,102,.1); color:#25D366; border-color:rgba(37,211,102,.3);" onclick="window.approveReview('${d.id}')">✅ Approve</button>
+              <button class="btn-del-row" onclick="window.rejectReview('${d.id}')">❌ Reject</button>
+            </div>`;
+          list.appendChild(row);
+        });
+      }
+    });
+
+    // 2. Load Approved (Live) Reviews
     onSnapshot(collection(db, 'reviews'), snap => {
       const list = document.getElementById('reviews-list');
       if (!list) return;
       list.innerHTML = '';
-      if (snap.empty) { list.innerHTML = '<p class="empty-note">No reviews yet.</p>'; return; }
+      if (snap.empty) { list.innerHTML = '<p class="empty-note">No approved reviews yet.</p>'; return; }
       snap.forEach(d => {
         const r = d.data();
         const row = document.createElement('div');
@@ -471,6 +504,47 @@
       });
     });
   };
+
+  // Approve moves it from pending_reviews to reviews
+  window.approveReview = async (id) => {
+    const reviewData = window._pendingReviewsMap[id];
+    if (!reviewData) return;
+    
+    try {
+      // 1. Add to live reviews collection
+      await addDoc(collection(db, 'reviews'), {
+        name: reviewData.name || '',
+        message: reviewData.message || '',
+        date: reviewData.date || ''
+      });
+      // 2. Delete from pending
+      await deleteDoc(doc(db, 'pending_reviews', id));
+      showToast('Review approved and pushed live!');
+    } catch(e) {
+      console.error(e);
+      showToast('Failed to approve review.');
+    }
+  };
+
+  // Reject strictly deletes it from pending_reviews
+  window.rejectReview = async (id) => {
+    if (!confirm('Reject and delete this pending review?')) return;
+    try {
+      await deleteDoc(doc(db, 'pending_reviews', id));
+      showToast('Pending review discarded.');
+    } catch(e) {
+      console.error(e);
+      showToast('Failed to discard review.');
+    }
+  };
+
+  // Delete already approved/live review
+  window.deleteReview = async id => {
+    if (!confirm('Remove this review from the live site?')) return;
+    await deleteDoc(doc(db, 'reviews', id));
+    showToast('Review removed.');
+  };
+
 
   window.addReview = async () => {
     const name = document.getElementById('rn').value.trim();
@@ -994,25 +1068,28 @@ body{font-family:'Jost',sans-serif;background:#0f1e16;color:var(--S);min-height:
       </div>
     </div>
 
-    <!-- REVIEWS PANEL -->
     <div class="panel">
       <div class="panel-head">
         <span class="panel-icon">⭐</span>
-        <span class="panel-title">Reviews</span>
+        <span class="panel-title">Reviews Management</span>
       </div>
       <div class="panel-body">
-        <div class="data-list" id="reviews-list"><p class="empty-note">Loading…</p></div>
-        <div class="divider"></div>
-        <div class="form-title">Add a New Review</div>
-        <div class="form-grid">
-          <input type="text" id="rn" placeholder="Reviewer Name"/>
-          <input type="text" id="rd" placeholder="Date (e.g. March 2025)"/>
-          <textarea id="rm" placeholder="Review message…" style="min-height:90px"></textarea>
+        
+        <div class="form-title">Pending Approvals</div>
+        <div class="data-list" id="pending-reviews-list" style="margin-bottom: 2rem;">
+          <p class="empty-note">Loading…</p>
         </div>
-        <div class="form-err" id="review-err"></div>
-        <button class="btn-add" onclick="addReview()">Publish Review ✦</button>
+
+        <div class="divider"></div>
+
+        <div class="form-title">Approved & Live Reviews</div>
+        <div class="data-list" id="reviews-list">
+          <p class="empty-note">Loading…</p>
+        </div>
+
       </div>
     </div>
+
 
     <!-- FAQs PANEL -->
     <div class="panel">
