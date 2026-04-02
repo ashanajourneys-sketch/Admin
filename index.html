@@ -471,7 +471,7 @@
           row.innerHTML = `
             <div class="row-info">
               <span class="row-title">⏳ ${r.name || 'Anonymous'}</span>
-              <span class="row-sub">${r.date || ''} &nbsp;·&nbsp; "${(r.message||'').substring(0,80)}${r.message && r.message.length > 80 ? '…' : ''}"</span>
+              <span class="row-sub" style="white-space: pre-wrap; line-height: 1.4; margin-top: 0.2rem; display: block;">${r.date || ''} &nbsp;·&nbsp; "${r.message || ''}"</span>
             </div>
             <div class="row-actions" style="flex-direction:row; gap:0.5rem;">
               <button class="btn-edit-row" style="background:rgba(37,211,102,.1); color:#25D366; border-color:rgba(37,211,102,.3);" onclick="window.approveReview('${d.id}')">✅ Approve</button>
@@ -495,7 +495,7 @@
         row.innerHTML = `
           <div class="row-info">
             <span class="row-title">⭐ ${r.name || 'Anonymous'}</span>
-            <span class="row-sub">${r.date || ''} &nbsp;·&nbsp; "${(r.message||'').substring(0,60)}${r.message && r.message.length > 60 ? '…' : ''}"</span>
+            <span class="row-sub" style="white-space: pre-wrap; line-height: 1.4; margin-top: 0.2rem; display: block;">${r.date || ''} &nbsp;·&nbsp; "${r.message || ''}"</span>
           </div>
           <div class="row-actions">
             <button class="btn-del-row" onclick="window.deleteReview('${d.id}')">Delete</button>
@@ -504,6 +504,7 @@
       });
     });
   };
+  
 
   // Approve moves it from pending_reviews to reviews
   window.approveReview = async (id) => {
