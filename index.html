@@ -57,12 +57,75 @@
     document.getElementById('ap').addEventListener('keydown', e => { if (e.key === 'Enter') window.doLogin(); });
   });
 
-  /* ── ImgBB Upload ── */
+  /* ── Image Compression Utility ── */
+  async function compressImage(file, maxDimension = 1600, quality = 0.8) {
+    // Skip compression if it's not a standard image (e.g., SVG or GIF)
+    if (file.type && !file.type.match(/image\/(jpeg|png|webp)/)) {
+      return file;
+    }
+
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target.result;
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+
+          // Scale down if the image is larger than maxDimension
+          if (width > height && width > maxDimension) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else if (height > width && height > maxDimension) {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          
+          // Draw the resized image onto the canvas
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Convert canvas back to a compressed JPEG Blob
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                // Return a new File object with the compressed blob
+                const fileName = file.name ? file.name.replace(/\.[^/.]+$/, "") + ".jpg" : "image.jpg";
+                const compressedFile = new File([blob], fileName, {
+                  type: 'image/jpeg',
+                  lastModified: Date.now()
+                });
+                resolve(compressedFile);
+              } else {
+                resolve(file); // Fallback to original if compression fails
+              }
+            },
+            'image/jpeg',
+            quality
+          );
+        };
+        img.onerror = () => resolve(file); // Fallback on image load error
+      };
+      reader.onerror = () => resolve(file); // Fallback on reader error
+    });
+  }
+
+    /* ── ImgBB Upload ── */
   const IMGBB_API_KEY = '5ae3562d05fb38e0029664fc1140fde9';
   async function uploadToImgBB(file) {
     if (!file) return '';
+    
+    // --> Run the file through the silent compressor first
+    const processedFile = await compressImage(file);
+    
     const formData = new FormData();
-    formData.append('image', file);
+    formData.append('image', processedFile);
     try {
       const res  = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
       const data = await res.json();
@@ -73,6 +136,8 @@
       return '';
     }
   }
+  
+  
 
   /* ── Upload multiple images and return array of URLs ── */
   async function uploadMultipleImages(fileInput) {
